@@ -1,0 +1,13 @@
+## R  
+.Rproj.user
+.Rhistory
+
+## GIS
+.dbf
+.prj
+.sbn
+.sbx
+.shp
+.shx
+.tif
+.qpj
