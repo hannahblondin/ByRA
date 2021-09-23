@@ -1,0 +1,175 @@
+---
+title: "Run ByRA in R"
+date: "Created on 2021-09-22; Updated on `r Sys.Date()`"
+output: 
+  html_document: default
+vignette: >
+  %\VignetteIndexEntry{Run ByRA in R}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+
+## Overview
+
+This vignette allows you to walk through an example of running `ByRA` (Bycatch Risk Assessment) in R. The example uses sample datasets from `InVEST` (Integrated Valuation of Ecosystem Services and Tradeoffs). The general workflow is: 
+
+1. Download InVEST and individual sample datasets for InVEST
+2. Run ByRA in R with default input data
+3. Modify input settings and run new scenarios
+
+## 1. Download InVEST and individual sample datasets for InVEST
+
+- [Latest version of InVEST](https://naturalcapitalproject.stanford.edu/software/invest)
+
+- [Risk Assessment User Guide](http://releases.naturalcapitalproject.org/invest-userguide/latest/habitat_risk_assessment.html)
+
+- [Individual sample datasets for InVEST - HabitatRiskAssess.zip](http://releases.naturalcapitalproject.org/?prefix=invest/3.9.0/data/)
+
+You can download the HabitatRiskAssess.zip using R as well. This vignette download the data to a temporary directory.  
+```{r}
+# Set up working directory and download HabitatRiskAssess.zip data
+temp_dir <- tempdir()
+
+temp_file <- file.path(temp_dir, "HabitatRiskAssess.zip")
+
+download.file("https://storage.googleapis.com/releases.naturalcapitalproject.org/invest/3.9.0/data/HabitatRiskAssess.zip", temp_file)
+
+unzip(temp_file, exdir = temp_dir)
+```
+
+> To print out working directory, you can `print(temp_dir)`.
+
+## 2. Run ByRA in R with default input data
+
+```{r}
+
+# Install following R packages
+# install.packages(c("jsonlite", "raster", "rgdal"))
+
+library(jsonlite)
+library(raster)
+library(rgdal)
+
+# Set up working directory
+working_dir <- file.path(temp_dir, "HabitatRiskAssess")
+
+# Write a JSON file with inputs
+json_list <- list(
+  args = list(
+    aoi_vector_path = file.path(working_dir, "Input", "subregions.shp"),
+    criteria_table_path = file.path(working_dir, "Input", "exposure_consequence_criteria.csv"),
+    decay_eq = "Linear",
+    info_table_path = file.path(working_dir, "Input", "habitat_stressor_info.csv"),
+    max_rating = "3",
+    resolution = "100",
+    results_suffix = "",
+    risk_eq = "Multiplicative",
+    visualize_outputs = "true"
+  ),
+  invest_version = "3.9.0",
+  model_name = "natcap.invest.hra"
+)
+
+json_path <- file.path(working_dir, "byra_datastack.json")
+
+jsonlite::write_json(json_list, path = json_path, auto_unbox = TRUE)
+
+# Run ByRA with default example data
+invest_path <- "C:/InVEST_3.9.0_x64/invest-3-x64/invest.exe"
+
+shell(paste(invest_path, "run --headless --datastack", json_path, "--workspace", working_dir, "habitat_risk_assessment"))
+
+# Plot output
+output_dir <- file.path(working_dir, "intermediate_outputs")
+risk_tifs <- c(
+  "RISK_hardbottom_Rec_Fishing.tif",
+  "RISK_softbottom_Rec_Fishing.tif"
+)
+legend_title <- c(
+  "hardbottom_Finfish_Aquaculture_Comm",
+  "softbottom_Rec_Fishing"
+)
+
+for (i in seq_along(risk_tifs)) {
+  par(mfrow = c(1, 1), mar = c(2, 2, 1, 1))
+  risk_raster <- raster(file.path(output_dir, risk_tifs[i]))
+  plot(risk_raster)
+  legend("topright", legend_title[i], cex = 0.5, bty = "n")
+}
+```
+
+## 3. Modify input settings and run new scenarios
+
+- Null scenario from previous run: temporal overlap rating of Rec_fishing weight = 3 and temporal overlap rating of Rec_fishing DQ = 3
+
+- Modify temporal overlap rating of Rec_fishing in the `exposure_consequence_criteria.csv` and create two scenarios:
+
+  - Scenario 1: change temporal overlap rating of Rec_fishing weight from 3 to 2
+
+  - Scenario 2: change temporal overlap rating of Rec_fishing DQ from 3 to 2
+  
+- Run multiple scenarios in R 
+- Compare outputs from different scenarios
+
+```{r}
+
+scenario_id <- c(1, 2) # Create scenario 1 and 2
+criteria_row <- c(29, 29) # Modify the value in row 29 in scenario 1 and 2
+criteria_col <- c(4, 3) # Modify the value in column 4 in scenario 1 and modify the value in column 3 in scenario 2
+criteria_val <- c(2, 2) # Change null scenario weight value to 2 in scenario 1 and change null scenario DQ value to 2 in scenario 2
+
+for (id in seq_along(scenario_id)) {
+
+  # Set up new working folder
+  scenario_dir <- file.path(working_dir, paste("S", scenario_id[id], sep = ""))
+  dir.create(scenario_dir)
+
+  # Copy input data from null scenario to new scenario
+  file.copy(file.path(working_dir, "Input"), scenario_dir, recursive = TRUE)
+
+  # Modify input values
+  ec_criteria <- read.csv(file.path(scenario_dir, "Input", "exposure_consequence_criteria.csv"), header = FALSE)
+
+  ec_criteria[criteria_row[id], criteria_col[id]] <- criteria_val[id]
+
+  write.csv(ec_criteria, file = file.path(scenario_dir, "Input", "exposure_consequence_criteria.csv"), row.names = F)
+
+  # Modify JSON file path arguments
+  file.copy(file.path(working_dir, "byra_datastack.json"), scenario_dir, recursive = TRUE)
+
+  json_path <- file.path(scenario_dir, "byra_datastack.json")
+  byra_json <- jsonlite::read_json(json_path)
+
+  byra_json$args$aoi_vector_path <- file.path(scenario_dir, "Input", "subregions.shp")
+  byra_json$args$criteria_table_path <- file.path(scenario_dir, "Input", "exposure_consequence_criteria.csv")
+  byra_json$args$info_table_path <- file.path(scenario_dir, "Input", "habitat_stressor_info.csv")
+
+  jsonlite::write_json(byra_json, path = json_path, auto_unbox = TRUE)
+
+
+  shell(paste(invest_path, "run --headless --datastack", json_path, "--workspace", scenario_dir, "habitat_risk_assessment"))
+}
+
+# Plot output
+for (id in seq_along(scenario_id)) {
+  output_dir <- file.path(working_dir, 
+                          paste("S", scenario_id[id], sep = ""), 
+                          "intermediate_outputs")
+  risk_tif <- c("RISK_softbottom_Rec_Fishing.tif")
+  par(mfrow = c(1, 1), mar = c(2, 2, 1, 1))
+  risk_raster <- raster(file.path(output_dir, risk_tif))
+  plot(risk_raster)
+  legend("topright", paste("Scenario", id), bty = "n")
+}
+
+```
+
+
