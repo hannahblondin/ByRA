@@ -1,0 +1,7 @@
+pandoc: 2.11.4
+pkgdown: 1.6.1
+pkgdown_sha: ~
+articles:
+  001_RunByRAinR: 001_RunByRAinR.html
+last_built: 2021-09-23T13:12Z
+
