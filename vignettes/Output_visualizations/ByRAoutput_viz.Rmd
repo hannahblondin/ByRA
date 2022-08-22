@@ -1,0 +1,287 @@
+---
+title: "ByRA Output Visualization in R"
+author: "Kelly DeForest"
+date: "4/19/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+## Paste ByRA outputs folder path below
+knitr::opts_knit$set(root.dir = 'C:/Users/kelly/Box Sync/modleR/ByRA_kd/vignettes/Output_visualizations/Sample_data/outputs')
+
+```
+
+### **Step 1:** Install packages & libraries
+```{r libraries, results = "hide"}
+
+# test for package existance and install
+if (!is.element("sf", installed.packages())) 
+    install.packages("sf", dep = T)
+if (!is.element("raster", installed.packages()))
+    install.packages("raster", dep = T)
+if (!is.element("tmap", installed.packages()))
+    install.packages("tmap", dep = T)
+if (!is.element("maptiles", installed.packages()))
+    install.packages("maptiles", dep = T)
+if (!is.element("tidyverse", installed.packages()))
+    install.packages("tidyverse", dep = T)
+if (!is.element("ggrepel", installed.packages()))
+    install.packages("ggrepel", dep = T)
+
+
+## Libraries 
+library(sf)
+library(raster)
+library(tmap)
+library(maptiles)
+library(tidyverse)
+library(ggrepel)
+library(grid)
+```
+ 
+### **Step 2:** User inputs
+```{r AOI, results = "hide"}
+
+# Input path to ByRA 'Outputs' folder. Putting the wd path here and in the 
+# first chunk is important. Not sure why but this allows for using the wd
+# object throughout the markdown. Otherwise it would only set the wd for 
+# this chunk.
+
+wd <- setwd("C:/Users/kelly/Box Sync/modleR/ByRA_kd/vignettes/Output_visualizations/Sample_data/outputs")
+
+# Input path to area of interest shapefile
+AOI <- st_read("C:/Users/kelly/Box Sync/modleR/ByRA_kd/vignettes/Output_visualizations/Sample_data/AOI/TRAT_AOI_subregions.shp")
+
+# Pick classification type for total risk rasters
+## examples: "jenks", "cont", "equal", "quantile"
+pick_style <- "cont"
+```
+
+### **Step 3:** Import data from user's working directory
+```{r ByRA_outputs}
+# Import the ecosystem bycatch risk rasters and statistics from folders
+RRE <- list.files(wd, pattern = "RECLASS_RISK_Ecosystem")
+TRE <-list.files(wd, pattern = "TOTAL_RISK_Ecosystem")
+allRR <- list.files(wd, pattern = "RECLASS")
+allTR <- list.files(wd, pattern = "TOTAL")
+stats <- list.files(wd, pattern = "SUMMARY")
+rd_stats <- read.csv(stats[1])
+stats_df <- as.data.frame(rd_stats)
+
+# Convert rasters to objects and set 0 values to NA
+RRE_ras <- raster(RRE)
+RRE_ras[RRE_ras==0] <- NA
+TRE_ras <- raster(TRE)
+TRE_ras[TRE_ras==0] <- NA
+```
+
+### **Step 4:** Make sure the input AOI CRS matches the ByRA outputs CRS
+```{r crs}
+#Check to see if the AOI and output raster CRS match, if not transform the 
+#AOI to match the output raster CRS.
+
+if (compareCRS(AOI,RRE_ras) == TRUE){
+  print("Confirmed: Input AOI and ByRA output raster have matching CRS")
+} else {
+  spTransform(AOI, crs(RRE_ras))
+  print("AOI was reprojected to match ByRA output raster CRS. However, using the same input AOI as used in ByRA is recommended.")
+}
+
+```
+### **Step 5:** Interactive map of Region-level bycatch risk
+##
+#### Layer descriptions adapted from [InVEST](https://storage.googleapis.com/releases.naturalcapitalproject.org/invest-userguide/latest/habitat_risk_assessment.html#model-outputs):
+##
+* **Total_Risk_Ecosystem** 
+  + This raster layer depicts the sum of habitat cumulative risk scores divided by the number of species occurring in each cell. It is best interpreted as an average risk across all species in a grid cell. For example, in a nearshore grid cell that contains habitat for three different species in your ByRA run, the ecosystem risk value reflects the sum of risk to all three species in the cell.
+
+* **Reclass_Risk_Ecosystem**
+  + This raster layer depicts the reclassified ecosystem risk in each cell. It is best interpreted as a reclassified average index of risk across all species in a grid cell classified into four categories, where 0 = No Risk, 1 = Low Risk, 2 = Medium Risk, and 3 = High Risk. Cells are classified as high risk if they have cumulative risk scores of 66%-100% of the total possible cumulative risk score. Cells are classified as medium risk if they have cumulative risk scores between 33%-66% of the total possible cumulative risk score. Cells are classified as low risk if they have cumulative risk scores of 0-33% of the total possible risk score for a single stressor or multiple stressors, respectively. If there is no stressor on a habitat cell, it is classified as no risk.
+
+```{r eco_map}
+
+#set tmap to interactive mode and plot
+tmap_mode("view")
+output_map <- tm_shape(AOI)+
+  tm_borders(col= "Black") +
+  tm_shape(RRE_ras) +
+  tm_raster(style = "fixed", palette = "Oranges", breaks = c(1,2,3,3), labels = c("1-low", "2-medium", "3-high"), legend.show = TRUE) +
+  tm_shape(TRE_ras) +
+  tm_raster(style = pick_style, palette = "Reds", legend.show = TRUE)+
+  tm_legend() + 
+  tm_view(view.legend.position = c("right","top"))+
+  tm_scale_bar(position = c("LEFT","BOTTOM"))
+output_map
+
+```
+
+### **Step 6:** Static maps of ecosystem-level bycatch risk
+```{r staticRRMap, fig.show="hold"}
+
+# define the tile server parameters
+osmpos <- list(src = 'CARTO.POSITRON',
+               q = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+               sub = c('a','b', 'c', 'd'), 
+               cit = '© OpenStreetMap contributors © CARTO.')
+
+# get open street map tiles for the area of interest
+AOItiles <- get_tiles(AOI,provider = osmpos, zoom = 11, verbose = TRUE)
+
+# setup layout view for printed maps
+grid.newpage()
+pushViewport(viewport(layout=grid.layout(1,2)))
+
+# plot
+tmap_mode("plot")
+for (r in 1:length(allRR)){
+  inras <- raster(allRR[r])
+  inras[inras==0] <- NA
+static_map <- tm_shape(AOItiles) +
+  tm_rgb()+
+  tm_grid(n.x = 4, n.y = 3)+
+  tm_shape(inras) +
+  tm_raster(style = "fixed", palette = "Oranges", breaks = c(1,2,3,3), labels = c("1-low", "2-medium", "3-high"), legend.show = TRUE)+
+  tm_shape(AOI)+
+  tm_borders(col= "Black")+
+  tm_compass(position= c("LEFT","bottom"))+
+  tm_scale_bar(position = c("center", "bottom"), width = 0.1)+
+  tm_layout(legend.position = c("right","TOP"), legend.frame = TRUE, legend.bg.color = "white", legend.frame.lwd = 2, frame = TRUE, frame.lwd = 3)
+tmap_save(static_map,paste0("reclassmap_",r,".png"))
+print(static_map, vp=viewport(layout.pos.col = r))
+}
+
+```
+
+### **Step 7:** Static maps of species-level bycatch risk
+```{r staticTRmap, fig.show="hold"}
+
+# define the tile server parameters
+osmpos <- list(src = 'CARTO.POSITRON',
+               q = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+               sub = c('a','b', 'c', 'd'), 
+               cit = '© OpenStreetMap contributors © CARTO.')
+
+# get open street map tiles for the area of interest
+AOItiles <- get_tiles(AOI,provider = osmpos, zoom = 11, verbose = TRUE)
+
+# setup layout view for printed maps
+grid.newpage()
+pushViewport(viewport(layout=grid.layout(1,2)))
+
+# plot
+tmap_mode("plot")
+for (r in 1:length(allTR)){
+  inras <- raster(allTR[r])
+  inras[inras==0] <- NA
+static_map <- tm_shape(AOItiles) +
+  tm_rgb()+
+  tm_grid(n.x = 4, n.y = 3)+
+  tm_shape(inras) +
+  tm_raster(style = pick_style, palette = "Reds", legend.show = TRUE)+
+  tm_shape(AOI)+
+  tm_borders(col= "Black")+
+  tm_compass(position= c("LEFT","bottom"))+
+  tm_scale_bar(position = c("center", "bottom"), width = 0.1)+
+  tm_layout(legend.position = c("right","TOP"), legend.frame = TRUE, legend.bg.color = "white", legend.frame.lwd = 2, frame = TRUE, frame.lwd = 3)
+tmap_save(static_map,paste0("totalmap_",r,".png"))
+print(static_map, vp=viewport(layout.pos.col = r))
+}
+```
+
+### **Step 8:** Summary Statistics
+##
+#### **Figure 1a.** Mean exposure, consequence, and risk scores from all stressors
+##
+* (*Note: This currently doesn't break it down by species - could add labels for species or make separate tables for each species.*)
+
+##
+
+```{r ByRA_stats}
+## Plot exposure, consequence, and risk values for each region and species
+scatter <- stats_df %>%
+  subset(STRESSOR == "(FROM ALL STRESSORS)") %>%
+  mutate(R_MEAN_rnd = round(R_MEAN,2))
+
+EC_plot <- scatter %>%
+  ggplot(aes(x = E_MEAN, y = C_MEAN,label = R_MEAN_rnd)) + 
+  geom_point(size=5, aes(shape = SUBREGION, color = R_MEAN_rnd))+
+  geom_label_repel(aes(label = R_MEAN_rnd, size=NULL), nudge_y = 0.3)+
+  scale_color_gradient(low="yellow", high = "red")+
+  expand_limits(x = c(0,3), y = c(0,3)) +
+  labs(x = "Mean Exposure", y = "Mean Consequence", color = "Mean Risk")+
+  ggtitle("Bycatch Exposure, Consequence, and Risk")
+EC_plot
+```
+
+#### **Figure 1b.** Mean exposure, consequence, and risk scores from all stressors.Mean exposure and consequence are on the x and y axis. The point shape identifies the species, point color identifies the subregion, and the values associated with each point are the mean risk.
+
+```{r ByRA_stats2}
+## Option 2 with a gradient background 
+r <- raster(xmn=0, xmx=3, ymn=0, ymx=3, ncol=100, nrow=100)
+X <- init(r, 'x')
+Y <- init(r, 'y')
+par(mfrow=c(1,2))
+Z <- X + Y
+Zdf <- as.data.frame(Z, xy=TRUE) %>%
+  mutate(z = x + y)
+
+resolution = 50
+Exposure = seq(0, 3, length.out = resolution)
+Consequence = seq(0, 3, length.out = resolution)    
+#Generate contours
+quarter_circle = function(r) {
+  tibble(Level = r,
+         Exposure = r * cos(seq(0, pi/2, length.out = resolution)),
+         Consequence = r * sin(seq(0, pi/2, length.out = resolution)))
+}
+contour_df <- map_dfr(seq(1, 4.5, by = 0.5) - 1, quarter_circle)
+
+ggplot() +               
+  geom_raster(data = Zdf, aes(x,y, fill = z), show.legend = FALSE)+
+  scale_fill_gradientn(colours=c("#abd9e9","#ffffbf","#fdae61","#d7191c")) +
+  geom_path(aes(Exposure, Consequence, group = Level), 
+            data = contour_df, 
+            color = "#336666",
+            size = 0.5,
+            linetype = "dotted") +
+  geom_point(data = scatter, aes(E_MEAN,C_MEAN, shape = HABITAT, color = SUBREGION), size = 4) +
+  # The rest of this tweaks the plot to make it look right
+  scale_x_continuous(limits = c(0, 3), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 3), expand = c(0, 0)) +
+  scale_colour_grey()+
+  geom_label_repel(data = scatter, aes(x = E_MEAN, y = C_MEAN, label = R_MEAN_rnd, size=NULL), nudge_y = 0.3)+
+  labs(x = "Exposure", y = "Consequence")+
+  ggtitle("Mean bycatch exposure, consequence, and risk by subregion")
+```
+
+
+#### **Figure 2.** The percentage of high, medium, and low risk areas combined for all stressors for each subregion as defined by the AOI.  
+##
+* (*Note: This currently doesn't represent the % of total subregion area, just % of area that has some amount of risk.*)
+
+##
+
+```{r Areal_risk}
+all_subset <- stats_df %>%
+  subset(STRESSOR == "(FROM ALL STRESSORS)") %>%
+  select(SUBREGION,R_.LOW, R_.MEDIUM,R_.HIGH)%>%
+  rename(LOW = R_.LOW,
+         MEDIUM = R_.MEDIUM,
+         HIGH = R_.HIGH) %>%
+  pivot_longer(cols = LOW:HIGH, names_to = "Bycatch_Risk", values_to = "Pct_Area") %>%
+  mutate(Bycatch_Risk_fac = factor(Bycatch_Risk)) %>%
+  select(SUBREGION,Bycatch_Risk_fac,Pct_Area)
+
+all_subset$Bycatch_Risk_fac2 <- relevel(all_subset$Bycatch_Risk_fac, 'LOW')
+all_subset$Bycatch_Risk_fac3 <- relevel(all_subset$Bycatch_Risk_fac2, 'MEDIUM')
+all_subset$Bycatch_Risk_fac4 <- relevel(all_subset$Bycatch_Risk_fac3, 'HIGH')
+ggplot(all_subset, aes(fill= Bycatch_Risk_fac4, y= Pct_Area, x=SUBREGION)) +
+  geom_bar(position="fill", stat="identity")+labs(x = "Subregion", y = "Percent Area") +
+  scale_fill_brewer(palette = "Set1", name = "Bycatch Risk")+
+  ggtitle("Areal Bycatch Risk by Subregion")
+  
+
+```
+
